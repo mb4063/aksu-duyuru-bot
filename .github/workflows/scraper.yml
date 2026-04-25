@@ -1,0 +1,44 @@
+name: Aksu Duyuru Scraper
+
+on:
+  schedule:
+    - cron: '0 9 * * *'   # Her gün saat 09:00'da (UTC+3)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Depoyu checkout et
+        uses: actions/checkout@v4
+
+      - name: Python kurulumu
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Bağımlılıkları yükle
+        run: |
+          pip install -r requirements.txt
+
+      - name: Scraper'ı çalıştır
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python scraper.py
+
+      - name: Değişiklikleri commit'le ve pushla
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/duyurular.json
+          if git diff --cached --quiet; then
+            echo "Commit edilecek değişiklik yok."
+          else
+            git commit -m "Günlük duyuru snapshot'ı güncellendi ($(date +%Y-%m-%d))"
+            git push
+          fi
