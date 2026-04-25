@@ -1,9 +1,9 @@
 import os
 import json
 import requests
-from bs4 import BeautifulSoup
 
-URL = "https://www.aksu.bel.tr/duyurular"
+API_URL = "https://cms.aksu.bel.tr/wp-json/wp/v2/duyurular?per_page=100"
+BASE_URL = "https://www.aksu.bel.tr/duyurular"
 DATA_FILE = "data/duyurular.json"
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
@@ -17,30 +17,27 @@ def fetch_announcements():
             "Chrome/115.0.0.0 Safari/537.36"
         )
     }
-    resp = requests.get(URL, headers=headers, timeout=30)
+    resp = requests.get(API_URL, headers=headers, timeout=30)
     resp.raise_for_status()
-    soup = BeautifulSoup(resp.text, "html.parser")
-
-    popup = soup.find("div", attrs={"role": "dialog", "aria-label": "Popup"})
+    data = resp.json()
 
     announcements = []
-    for a in soup.find_all("a", href=True):
-        href = a.get("href", "")
-        if not href.startswith("/duyurular/"):
+    for item in data:
+        post_id = item.get("id")
+        title = item.get("title", {}).get("rendered", "").strip()
+        slug = item.get("slug", "")
+        date = item.get("date", "")
+
+        if not post_id or not title or not slug:
             continue
 
-        # popup filtresi
-        if popup and a.find_parent("div", attrs={"role": "dialog", "aria-label": "Popup"}):
-            continue
-
-        h3 = a.find("h3")
-        if not h3:
-            continue
-
-        title = h3.get_text(strip=True)
-        full_url = f"https://www.aksu.bel.tr{href}"
-
-        announcements.append({"url": full_url, "title": title})
+        public_url = f"{BASE_URL}/{slug}"
+        announcements.append({
+            "id": post_id,
+            "title": title,
+            "url": public_url,
+            "date": date,
+        })
 
     return announcements
 
@@ -58,15 +55,32 @@ def save_current(announcements):
         json.dump(announcements, f, ensure_ascii=False, indent=2)
 
 
-def send_telegram(new_announcements):
+def send_telegram_plain(text):
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        print("Telegram kimlik bilgileri eksik, bildirim atlanıyor.")
+        return
+
+    api_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": text,
+        "parse_mode": "Markdown",
+        "disable_web_page_preview": True,
+    }
+    resp = requests.post(api_url, json=payload, timeout=30)
+    resp.raise_for_status()
+    print("Telegram bildirimi başarıyla gönderildi.")
+
+
+def send_telegram_list(header, announcements):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("Telegram kimlik bilgileri eksik, bildirim atlanıyor.")
         return
 
     chunks = []
-    current = "🔔 *Aksu Belediyesi'nde Yeni Duyurular:*\n"
+    current = header
 
-    for ann in new_announcements:
+    for ann in announcements:
         block = f"\n• {ann['title']}\n🔗 {ann['url']}"
         if len(current) + len(block) > 4000:
             chunks.append(current)
@@ -92,27 +106,43 @@ def send_telegram(new_announcements):
 def main():
     print("Duyurular çekiliyor...")
     current = fetch_announcements()
-    print(f"Sayfada {len(current)} duyuru bulundu.")
+    print(f"API'den {len(current)} duyuru alındı.")
 
     if not current:
-        raise RuntimeError("Sayfada hiç duyuru bulunamadı, site yapısı değişmiş olabilir.")
+        raise RuntimeError("API'den duyuru alınamadı, bağlantı veya yapı değişmiş olabilir.")
 
     previous = load_previous()
-    previous_urls = {ann["url"] for ann in previous}
+    previous_ids = {ann["id"] for ann in previous}
 
-    new_announcements = [ann for ann in current if ann["url"] not in previous_urls]
+    new_announcements = [ann for ann in current if ann["id"] not in previous_ids]
 
     if previous and new_announcements:
         print(f"{len(new_announcements)} yeni duyuru tespit edildi.")
-        send_telegram(new_announcements)
+        send_telegram_list(
+            "🔔 *Aksu Belediyesi'nde Yeni Duyurular:*",
+            new_announcements,
+        )
     elif not previous:
-        print("İlk çalıştırma: snapshot oluşturuluyor, bildirim gönderilmiyor.")
+        print("İlk çalıştırma: mevcut duyurular Telegram'a gönderiliyor...")
+        send_telegram_list(
+            "🤖 *Bot başlatıldı. Takip edilen duyurular:*",
+            current,
+        )
     else:
         print("Yeni duyuru yok.")
+        send_telegram_plain("📭 *Aksu Belediyesi'nde yeni duyuru yok.*")
 
     save_current(current)
     print("Snapshot kaydedildi.")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        error_msg = f"⚠️ *Bot Hatası:*\n```{type(e).__name__}: {e}```"
+        try:
+            send_telegram_plain(error_msg)
+        except Exception as te:
+            print(f"Hata bildirimi gönderilemedi: {te}")
+        raise
