@@ -55,21 +55,25 @@ def save_current(announcements):
         json.dump(announcements, f, ensure_ascii=False, indent=2)
 
 
-def send_telegram_plain(text):
+def send_telegram(text):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("Telegram kimlik bilgileri eksik, bildirim atlanıyor.")
-        return
+        return False
 
     api_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
         "text": text,
-        "parse_mode": "Markdown",
         "disable_web_page_preview": True,
     }
-    resp = requests.post(api_url, json=payload, timeout=30)
-    resp.raise_for_status()
-    print("Telegram bildirimi başarıyla gönderildi.")
+    try:
+        resp = requests.post(api_url, json=payload, timeout=30)
+        resp.raise_for_status()
+        print("Telegram bildirimi gonderildi.")
+        return True
+    except Exception as e:
+        print(f"Telegram gonderimi basarisiz: {e}")
+        return False
 
 
 def send_telegram_list(header, announcements):
@@ -81,7 +85,7 @@ def send_telegram_list(header, announcements):
     current = header
 
     for ann in announcements:
-        block = f"\n• {ann['title']}\n🔗 {ann['url']}"
+        block = f"\n- {ann['title']}\n  {ann['url']}"
         if len(current) + len(block) > 4000:
             chunks.append(current)
             current = block
@@ -89,60 +93,49 @@ def send_telegram_list(header, announcements):
             current += block
     chunks.append(current)
 
-    api_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     for text in chunks:
-        payload = {
-            "chat_id": TELEGRAM_CHAT_ID,
-            "text": text,
-            "parse_mode": "Markdown",
-            "disable_web_page_preview": True,
-        }
-        resp = requests.post(api_url, json=payload, timeout=30)
-        resp.raise_for_status()
-
-    print("Telegram bildirimi başarıyla gönderildi.")
+        send_telegram(text)
 
 
 def main():
-    print("Duyurular çekiliyor...")
+    print("Duyurular cekiliyor...")
     current = fetch_announcements()
-    print(f"API'den {len(current)} duyuru alındı.")
+    print(f"API'den {len(current)} duyuru alindi.")
 
     if not current:
-        raise RuntimeError("API'den duyuru alınamadı, bağlantı veya yapı değişmiş olabilir.")
+        raise RuntimeError("API'den duyuru alinamadi, baglanti veya yapi degismis olabilir.")
 
     previous = load_previous()
     previous_ids = {ann["id"] for ann in previous}
 
     new_announcements = [ann for ann in current if ann["id"] not in previous_ids]
 
-    if previous and new_announcements:
-        print(f"{len(new_announcements)} yeni duyuru tespit edildi.")
-        send_telegram_list(
-            "🔔 *Aksu Belediyesi'nde Yeni Duyurular:*",
-            new_announcements,
-        )
-    elif not previous:
-        print("İlk çalıştırma: mevcut duyurular Telegram'a gönderiliyor...")
-        send_telegram_list(
-            "🤖 *Bot başlatıldı. Takip edilen duyurular:*",
-            current,
-        )
-    else:
-        print("Yeni duyuru yok.")
-        send_telegram_plain("📭 *Aksu Belediyesi'nde yeni duyuru yok.*")
-
-    save_current(current)
-    print("Snapshot kaydedildi.")
+    try:
+        if previous and new_announcements:
+            print(f"{len(new_announcements)} yeni duyuru tespit edildi.")
+            send_telegram_list(
+                "🔔 Aksu Belediyesi'nde Yeni Duyurular:",
+                new_announcements,
+            )
+        elif not previous:
+            print("Ilk calistirma: mevcut duyurular Telegram'a gonderiliyor...")
+            send_telegram_list(
+                "🤖 Bot baslatildi. Takip edilen duyurular:",
+                current,
+            )
+        else:
+            print("Yeni duyuru yok.")
+            send_telegram("📭 Aksu Belediyesi'nde yeni duyuru yok.")
+    finally:
+        save_current(current)
+        print("Snapshot kaydedildi.")
 
 
 if __name__ == "__main__":
     try:
         main()
     except Exception as e:
-        error_msg = f"⚠️ *Bot Hatası:*\n```{type(e).__name__}: {e}```"
-        try:
-            send_telegram_plain(error_msg)
-        except Exception as te:
-            print(f"Hata bildirimi gönderilemedi: {te}")
-        raise
+        error_text = f"⚠️ Bot Hatasi: {type(e).__name__}: {e}"
+        print(error_text)
+        send_telegram(error_text)
+        raise SystemExit(1)
