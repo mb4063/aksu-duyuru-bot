@@ -2,7 +2,7 @@ name: Aksu Duyuru Scraper
 
 on:
   schedule:
-    - cron: '0 9 * * *'   # Her gün saat 09:00'da (UTC+3)
+    - cron: '0 20 * * *'   # Her gün saat 23:00'da (UTC+3)
   workflow_dispatch:
 
 permissions:
